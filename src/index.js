@@ -5,6 +5,23 @@ import winston from 'winston'
 const AWS_PREFIX = 'aws'
 
 /**
+ * @param key the name of the ElastiCache cluster to resolve
+ * @param awsParameters parameters to pass to the AWS.ElastiCache constructor
+ * @returns {Promise<AWS.ElastiCache.CacheCluster>}
+ * @see https://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/ElastiCache.html#describeCacheClusters-property
+ */
+async function getECSValue(key, awsParameters) {
+  winston.debug(`Resolving ElastiCache cluster with name ${key}`)
+  const ecs = new AWS.ElastiCache({ ...awsParameters, apiVersion: '2015-02-02' })
+  const result = await ecs.describeCacheClusters({ CacheClusterId: key, ShowCacheNodeInfo: true }).promise()
+  if (!result || !result.CacheClusters.length) {
+    throw new Error(`Could not find ElastiCache cluster with name ${key}`)
+  }
+
+  return result.CacheClusters[0]
+}
+
+/**
  * @param key the name of the ElasticSearch cluster to resolve
  * @param awsParameters parameters to pass to the AWS.ES constructor
  * @returns {Promise<AWS.ES.ElasticsearchDomainStatus>}
@@ -128,7 +145,7 @@ async function getRDSValue(key, awsParameters) {
   const rds = new AWS.RDS({ ...awsParameters, apiVersion: '2014-10-31' })
   const result = await rds.describeDBInstances({ DBInstanceIdentifier: key }).promise()
   if (!result) {
-    throw new Error(`Could Not find any databases with identifier ${key}`)
+    throw new Error(`Could not find any databases with identifier ${key}`)
   }
   // Parse out the instances
   const instances = result.DBInstances
@@ -141,6 +158,7 @@ async function getRDSValue(key, awsParameters) {
 }
 
 const AWS_HANDLERS = {
+  ecs: getECSValue,
   ess: getESSValue,
   kinesis: getKinesisValue,
   dynamodb: getDynamoDbValue,
@@ -148,15 +166,19 @@ const AWS_HANDLERS = {
   ec2: getEC2Value
 }
 
-const DEFAULT_AWS_PATTERN = /^aws:\w+:[\w-.]+:\w+$/
-const SUB_SERVICE_AWS_PATTERN = /^aws:\w+:\w+:[\w-.]+:\w+$/
+/* eslint-disable no-useless-escape */
+const DEFAULT_AWS_PATTERN = /^aws:\w+:[\w-.]+:[\w.\[\]]+$/
+const SUB_SERVICE_AWS_PATTERN = /^aws:\w+:\w+:[\w-.]+:[\w.\[\]]+$/
+/* eslint-enable no-useless-escape */
+
 /**
  * @param variableString the variable to resolve
  * @param region the AWS region to use
+ * @param strictMode throw errors if aws can't find value or allow overwrite
  * @returns {Promise.<String>} a promise for the resolved variable
  * @example const myResolvedVariable = await getValueFromAws('aws:kinesis:my-stream:StreamARN', 'us-east-1')
  */
-async function getValueFromAws(variableString, region) {
+async function getValueFromAws(variableString, region, strictMode) {
   // The format is aws:${service}:${key}:${request} or aws:${service}:${subService}:${key}:${request}.
   // eg.: aws:kinesis:stream-name:StreamARN
   // Validate the input format
@@ -186,7 +208,18 @@ async function getValueFromAws(variableString, region) {
         key = subKey.split(':')[0]
       }
 
-      const description = await AWS_HANDLERS[service](key, commonParameters) // eslint-disable-line no-await-in-loop, max-len
+      let description
+      try {
+        description = await AWS_HANDLERS[service](key, commonParameters) // eslint-disable-line no-await-in-loop, max-len
+      } catch (e) {
+        if (strictMode) {
+          throw e
+        }
+
+        winston.debug(`Error while resolving ${variableString}: ${e.message}`)
+        return null
+      }
+
       // Validate that the desired property exists
       if (!_.has(description, request)) {
         throw new Error(`Error resolving ${variableString}. Key '${request}' not found. Candidates are ${Object.keys(description)}`)
@@ -228,11 +261,12 @@ class ServerlessAWSResolvers {
     const delegate = _.bind(serverless.variables.getValueFromSource, serverless.variables)
     serverless.variables.getValueFromSource = function getValueFromSource(variableString) { // eslint-disable-line no-param-reassign, max-len
       const region = serverless.service.provider.region
+      const strictMode = _.get(serverless.service.custom, 'awsResolvers.strict', true)
       if (!region) {
         throw new Error('Cannot hydrate AWS variables without a region')
       }
       if (variableString.startsWith(`${AWS_PREFIX}:`)) {
-        return getValueFromAws(variableString, region)
+        return getValueFromAws(variableString, region, strictMode)
       }
 
       return delegate(variableString)
