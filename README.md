@@ -1,4 +1,8 @@
 # serverless-plugin-aws-resolvers
+
+> **⚠️ This repository is archived and no longer maintained.**
+> No further development, bug fixes, or security updates will be provided.
+
 [![serverless](http://public.serverless.com/badges/v3.svg)](http://www.serverless.com)
 [![Coverage Status](https://coveralls.io/repos/github/jacob-meacham/serverless-plugin-aws-resolvers/badge.svg?branch=develop)](https://coveralls.io/github/jacob-meacham/serverless-plugin-aws-resolvers?branch=develop)
 [![Build Status](https://travis-ci.org/jacob-meacham/serverless-plugin-aws-resolvers.svg?branch=develop)](https://travis-ci.org/jacob-meacham/serverless-plugin-aws-resolvers)
